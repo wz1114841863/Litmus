@@ -1,5 +1,14 @@
 # env
 .venv/*
 
-# files
+# cache
+__pycache__/
+*.pyc
+
+# include all files in data/
 *.pdf
+metadata.sqlite
+
+
+# api keys
+api_keys.py

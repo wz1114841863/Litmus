@@ -2,3 +2,4 @@ pandas
 numpy
 PyMuPDF
 sqlalchemy
+openai
