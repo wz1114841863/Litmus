@@ -3,3 +3,5 @@ numpy
 PyMuPDF
 sqlalchemy
 openai
+sentence-transformers
+chromadb

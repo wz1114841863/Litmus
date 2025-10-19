@@ -22,5 +22,7 @@ EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 LLM_MODEL = "llama3:8b"
 
 # --- API Configuration ---
-USE_API_FOR_LLM = False  # Set to True to switch to API mode
+USE_API_FOR_LLM = True  # Set to True to switch to API mode
 OPENAI_API_KEY = API_KEY
+BASE_URL = "https://api.deepseek.com"
+MODEL_NAME = "deepseek-chat"  # OpenAI model name
