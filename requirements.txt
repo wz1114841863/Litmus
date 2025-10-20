@@ -5,3 +5,4 @@ sqlalchemy
 openai
 sentence-transformers
 chromadb
+streamlit
