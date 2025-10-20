@@ -26,3 +26,6 @@ USE_API_FOR_LLM = True  # Set to True to switch to API mode
 OPENAI_API_KEY = API_KEY
 BASE_URL = "https://api.deepseek.com"
 MODEL_NAME = "deepseek-chat"  # OpenAI model name
+
+# Seacrh configuration
+SEMANTIC_SEARCH_THRESHOLD = 1.0
