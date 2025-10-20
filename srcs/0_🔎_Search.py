@@ -5,14 +5,16 @@ import config
 import search_engine
 
 from pathlib import Path
+from urllib.parse import quote_plus
 
-# To enable app.py to locate and import our own module
+
+# To enable streamlit to locate and import our own module
 APP_DIR = Path(__file__).parent
 sys.path.append(str(APP_DIR))
 
 # Streamlit Page Configuration
 st.set_page_config(
-    page_title="Litmus 🧪 - Your Personal Research Assistant",
+    page_title="Your Personal Research Assistant",
     page_icon="🧪",
     layout="wide",  # use wide mode for more space
 )
@@ -53,12 +55,11 @@ if search_button and query:
                 st.markdown(f"**Authors:** *{paper['authors']}*")
                 st.info(f"**AI Summary:** {paper['generated_summary']}")
                 st.markdown(f"**Keywords:** `{paper['keywords']}`")
-                # create a google search link for the paper title
-                google_search_url = f"https://www.google.com/search?q={paper['title'].replace(' ', '+')}"
-                st.markdown(
-                    f"[Search for this paper on Google]({google_search_url})",
-                    unsafe_allow_html=True,
+                # create a google scholar search link for the paper title
+                scholar_url = "https://scholar.google.com/scholar?q=" + quote_plus(
+                    paper["title"]
                 )
+                st.markdown(f"[Search for this paper on Google Scholar]({scholar_url})")
 
                 st.markdown(f"--- \n *Local Path: `{paper['file_path']}`*")
 elif search_button and not query:

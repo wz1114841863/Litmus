@@ -1,6 +1,11 @@
 import sqlite3
 import chromadb
 import config
+import openai
+import json
+
+import config
+
 from sentence_transformers import SentenceTransformer
 
 
@@ -85,21 +90,72 @@ def semantic_search(query, top_k=5):
     return filtered_ids
 
 
+def expand_query_with_llm(query):
+    """Expand the user query using an LLM to include related terms."""
+    print(f"\nExpanding query using LLM: '{query}'")
+    prompt = f"""
+            You are a search query expansion expert.
+            Given the user query, output **only** a JSON list (no wrapper object, no extra keys) with 3-5 related search terms.
+            Put the original query as the first element.
+
+            User Query: "{query}"
+
+            JSON List Output:
+        """
+    if not config.USE_API_FOR_LLM or not config.API_KEY:
+        raise ValueError("API key is not configured or API usage is disabled.")
+
+    client = openai.OpenAI(api_key=config.API_KEY, base_url=config.BASE_URL)
+    try:
+        response = client.chat.completions.create(
+            model=config.MODEL_NAME,
+            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that strictly outputs JSON.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+        )
+        reply_content = response.choices[0].message.content
+        expanded_queries = json.loads(reply_content)
+        # print(f"  - LLM response: {reply_content}")
+        if query not in expanded_queries:
+            expanded_queries.insert(0, query)
+            print(f"  - Expanded queries: {expanded_queries}")
+        return expanded_queries
+    except Exception as e:
+        print(f"  - LLM query expansion failed: {e}")
+        return [query]
+
+
 def hybrid_search(query, top_k=5):
     """Combine keyword and semantic search results."""
-    keyword_ids = set(keyword_search(query, top_k))
-    semantic_ids = set(semantic_search(query, top_k))
+    all_queries = expand_query_with_llm(query)
 
-    print("\nFusing results with Reciprocal Rank Fusion...")
+    all_keyword_ids = set()
+    all_semantic_ids = set()
+
+    for q in all_queries:
+        keyword_results = keyword_search(q, top_k=top_k)
+        semantic_results = semantic_search(q, top_k=top_k)
+        all_keyword_ids.update(keyword_results)
+        all_semantic_ids.update(semantic_results)
+
+    keyword_ids_list = list(all_keyword_ids)
+    semantic_ids_list = list(all_semantic_ids)
+
     fused_scores = {}
-    k = 60  # RRF constant
+    k = 60
 
-    for rank, doc_id in enumerate(keyword_ids):
+    for rank, doc_id in enumerate(keyword_ids_list):
         if doc_id not in fused_scores:
             fused_scores[doc_id] = 0
         fused_scores[doc_id] += 1 / (k + rank + 1)
 
-    for rank, doc_id in enumerate(semantic_ids):
+    for rank, doc_id in enumerate(semantic_ids_list):
         if doc_id not in fused_scores:
             fused_scores[doc_id] = 0
         fused_scores[doc_id] += 1 / (k + rank + 1)

@@ -16,9 +16,12 @@ DB_PATH = DATA_DIR / "metadata.sqlite"
 # ChromaDB vector database storage path
 CHROMA_PATH = DATA_DIR / "vector_store"
 
+# Log File Path
+LOG_FILE_PATH = DATA_DIR / "failed_pdfs.log"
 
 # --- AI Model Configuration ---
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+# EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5"
 LLM_MODEL = "llama3:8b"
 
 # --- API Configuration ---
