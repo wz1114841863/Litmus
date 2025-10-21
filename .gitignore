@@ -8,6 +8,7 @@ __pycache__/
 # include all files in data/
 *.pdf
 metadata.sqlite
+metadata.sqlite-journal
 data/vector_store/*
 
 # api keys

@@ -2,20 +2,13 @@ import argparse
 import sqlite3
 import json
 import openai
-import config
 import chromadb
+
+import config
 
 from sentence_transformers import SentenceTransformer
 from pathlib import Path
-
-DB_PATH = config.DB_PATH
-CHROMA_PATH = config.CHROMA_PATH
-EMBEDDING_MODEL = config.EMBEDDING_MODEL
-LLM_MODEL = config.LLM_MODEL
-USE_API_FOR_LLM = config.USE_API_FOR_LLM
-API_KEY = config.OPENAI_API_KEY
-BASE_URL = config.BASE_URL
-MODEL_NAME = config.MODEL_NAME
+from tqdm import tqdm
 
 
 def add_column_if_not_exists(cursor, table, col_def):
@@ -28,76 +21,54 @@ def add_column_if_not_exists(cursor, table, col_def):
 
 
 def update_database_schema():
-    """Adds new columns to the papers table for storing AI-generated data."""
+    """Updates the database schema to include new columns for analysis results."""
     print("Updating database schema...")
-    with sqlite3.connect(DB_PATH) as conn:
+    with sqlite3.connect(config.DB_PATH) as conn:
         cursor = conn.cursor()
 
         try:
-            add_column_if_not_exists(cursor, "papers", "generated_summary TEXT")
+            add_column_if_not_exists(cursor, "chunks", "is_analyzed INTEGER DEFAULT 0")
+            add_column_if_not_exists(cursor, "papers", "structured_summary TEXT")
             add_column_if_not_exists(cursor, "papers", "keywords TEXT")
-            # Add a flag to track whether a paper has been analyzed
-            add_column_if_not_exists(cursor, "papers", "is_analyzed INTEGER DEFAULT 0")
         except sqlite3.OperationalError as e:
-            # This error occurs if the columns already exist, which is fine.
-            if "duplicate column name" in str(e):
-                print("  - Columns already exist, skipping.")
-            else:
-                raise e
+            pass
         conn.commit()
 
 
-def get_unprocessed_papers(re_analyze_all: bool = False):
-    """Retrieves papers that have not yet been analyzed by the AI model."""
-    with sqlite3.connect(DB_PATH) as conn:
+def get_unprocessed_chunks(re_analyze_all: bool = False):
+    """Retrieves chunks that have not yet been analyzed by the AI model."""
+    with sqlite3.connect(config.DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         if re_analyze_all:
-            cursor.execute("SELECT * FROM papers")
+            cursor.execute(
+                "SELECT c.id, c.paper_id, c.chunk_text, c.chunk_index, p.title FROM chunks c JOIN papers p ON c.paper_id = p.id"
+            )
         else:
-            cursor.execute("SELECT * FROM papers WHERE is_analyzed = 0")
+            cursor.execute(
+                "SELECT c.id, c.paper_id, c.chunk_text, c.chunk_index, p.title FROM chunks c JOIN papers p ON c.paper_id = p.id WHERE c.is_analyzed = 0"
+            )
         return cursor.fetchall()
 
 
-def generate_summary_and_keywords(abstract):
-    """Uses the AI model to generate a summary and keywords for the given abstract."""
-    prompt = f"""
-        You are an expert AI research assistant. Your task is to analyze the following academic text (abstract + introduction).
-        Based *only* on the text provided, generate:
-        1. A concise, one-sentence summary of the paper's core contribution.
-        2. A list of 5-7 conceptual keywords or phrases that categorize this paper. Examples include "Image Segmentation", "Contrastive Learning", "Transformer Architecture", etc.
-
-        Do not use any information outside of the provided abstract.
-        Provide your output in a valid JSON format with two keys: "summary" and "keywords".
-
-        Abstract:
-        "{abstract}"
-
-        JSON Output:
-    """
-    """Requires local deployment of the corresponding model implementation."""
-    pass
-    return "N/A", []
-
-
-def generate_conceptual_keywords_api(text):
+def generate_conceptual_keywords_api(full_text):
     """Generates conceptual keywords using the AI model."""
-    # [FIXED]Prompt now asks for a JSON object containing the list.
+    prompt_text = " ".join(full_text.split()[:4000])
     prompt = f"""
         You are an expert AI research assistant. Your task is to extract 5-7 conceptual keywords or phrases that categorize the following academic text. Examples include "Image Segmentation", "Contrastive Learning", "Transformer Architecture", etc.
         Provide your output as a valid JSON object with a single key "keywords", which contains a list of strings.
 
-        Text:"{text}"
+        Text:"{prompt_text}"
 
         JSON Output:
     """
-    if not USE_API_FOR_LLM or not API_KEY:
+    if not config.USE_API_FOR_LLM or not config.API_KEY:
         raise ValueError("API key is not configured or API usage is disabled.")
 
-    client = openai.OpenAI(api_key=API_KEY, base_url=BASE_URL)
+    client = openai.OpenAI(api_key=config.API_KEY, base_url=config.BASE_URL)
     try:
         response = client.chat.completions.create(
-            model=MODEL_NAME,
+            model=config.MODEL_NAME,
             response_format={"type": "json_object"},
             messages=[
                 {
@@ -109,7 +80,6 @@ def generate_conceptual_keywords_api(text):
             temperature=0.2,
         )
         reply_content = response.choices[0].message.content
-        # [FIXED]Parse the object and then extract the list.
         result = json.loads(reply_content)
         return result["keywords"]
     except Exception as e:
@@ -117,22 +87,27 @@ def generate_conceptual_keywords_api(text):
         return []
 
 
-def generate_summary_api(text):
-    """Generates a concise summary from the given text using the AI model."""
+def generate_structured_summary_api(full_text):
+    """Generates a concise summary from full text using the AI model."""
+    # To avoid exceeding context limits, we'll use the first ~4000 words
+    prompt_text = " ".join(full_text.split()[:4000])
     prompt = f"""
-    Based *only* on the provided academic text, generate a concise, one-sentence summary of the paper's core contribution.
-    Provide your output as a valid JSON object with a single key "summary".
+        You are an expert academic reviewer. Analyze the following text from a research paper.
+        Your task is to extract the following key information and provide it in a valid JSON format.
+        1.  **motivation**: What is the core problem or research gap the paper addresses?
+        2.  **methodology**: What is the proposed solution, technique, or framework?
+        3.  **key_results**: What are the main findings or contributions of the paper?
 
-    Text: "{text}"
+        Text: "{prompt_text}"
 
-    JSON Output:
+        JSON Output:
     """
-    if not USE_API_FOR_LLM or not API_KEY:
+    if not config.USE_API_FOR_LLM or not config.API_KEY:
         raise ValueError("OpenAI API key is not configured or API usage is disabled.")
-    client = openai.OpenAI(api_key=API_KEY, base_url=BASE_URL)
+    client = openai.OpenAI(api_key=config.API_KEY, base_url=config.BASE_URL)
     try:
         response = client.chat.completions.create(
-            model=MODEL_NAME,
+            model=config.MODEL_NAME,
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": prompt},
@@ -141,47 +116,10 @@ def generate_summary_api(text):
         )
         reply_content = response.choices[0].message.content.strip()
         result = json.loads(reply_content)
-        return result["summary"]
+        return result
     except Exception as e:
         print(f"Error during OpenAI API call for summary: {e}")
         return "N/A"
-
-
-def generate_summary_and_keywords_openai(abstract):
-    """Uses OpenAI API to generate a summary and keywords for the given abstract."""
-    if not USE_API_FOR_LLM or not API_KEY:
-        raise ValueError("OpenAI API key is not configured or API usage is disabled.")
-
-    client = openai.OpenAI(api_key=API_KEY, base_url=BASE_URL)
-    prompt = f"""
-        You are an expert AI research assistant. Your task is to analyze the following academic paper abstract.
-        Based *only* on the text provided, generate:
-        1. A concise, one-sentence summary of the paper's core contribution.
-        2. A list of 5-7 conceptual keywords or phrases that categorize this paper. Examples include "Image Segmentation", "Contrastive Learning", "Transformer Architecture", etc.
-
-        Do not use any information outside of the provided abstract.
-        Provide your output in a valid JSON format with two keys: "summary" and "keywords".
-
-        Abstract:
-        "{abstract}"
-
-        JSON Output:
-    """
-    try:
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.2,  # maybe need a Config option
-        )
-        reply_content = response.choices[0].message.content.strip()
-        result = json.loads(reply_content)
-        return result["summary"], result["keywords"]
-    except Exception as e:
-        print(f"Error during OpenAI API call: {e}")
-        return "N/A", []
 
 
 def main():
@@ -189,7 +127,7 @@ def main():
     parser = argparse.ArgumentParser(description="Litmus AI Analysis Engine")
     parser.add_argument(
         "--re-analyze",
-        action="store_true",  # 当出现 --re-analyze 时,该参数值为 True
+        action="store_true",
         help="Force re-analysis of all papers in the database, ignoring the 'is_analyzed' flag.",
     )
     args = parser.parse_args()
@@ -197,73 +135,113 @@ def main():
     print("Litmus: Starting AI Analysis Engine Started...")
     update_database_schema()
 
-    print("\n Loading models")
-    embedding_model = SentenceTransformer(EMBEDDING_MODEL)
-    chroma_client = chromadb.PersistentClient(path=str(CHROMA_PATH))
+    embedding_model = SentenceTransformer(config.EMBEDDING_MODEL)
+    chroma_client = chromadb.PersistentClient(path=str(config.CHROMA_PATH))
     collection = chroma_client.get_or_create_collection(name="papers")
     print("Models and vector database loaded.")
 
-    papers_to_process = get_unprocessed_papers(re_analyze_all=args.re_analyze)
-    if not papers_to_process:
-        print("No unprocessed papers found. All papers are up-to-date.")
+    chunks_to_process = get_unprocessed_chunks(re_analyze_all=args.re_analyze)
+    if not chunks_to_process:
+        print("No unprocessed chunks found. All chunks are up-to-date.")
         print("--- Analysis Complete ---")
         return
 
-    for i, paper in enumerate(papers_to_process):
-        paper_id = paper["id"]
-        content = paper["abstract"]
-        author_keywords_str = (
-            paper["author_keywords"] if "author_keywords" in paper else ""
-        )
-        print(f"\nProcessing Paper ID {paper_id} ({i+1}/{len(papers_to_process)})")
-        # if USE_API_FOR_LLM:
-        #     summary, keywords = generate_summary_and_keywords_openai(abstract)
-        # else:
-        #     summary, keywords = generate_summary_and_keywords(abstract)
+    processed_paper_ids = set()
+    with sqlite3.connect(config.DB_PATH) as conn:
+        cursor = conn.cursor()
+        for chunk in tqdm(chunks_to_process, desc="Analyzing Chunks"):
+            chunk_id = chunk["id"]
+            paper_id = chunk["paper_id"]
 
-        if USE_API_FOR_LLM:
-            summary = generate_summary_api(content)
-            author_kws = (
-                [kw.strip() for kw in author_keywords_str.split(";") if kw.strip()]
-                if author_keywords_str
-                else []
+            embedding = embedding_model.encode(
+                chunk["chunk_text"], convert_to_tensor=False
             )
-            generative_kws = generate_conceptual_keywords_api(content)
-            all_keywords = {
-                "author": list(set(author_kws)),
-                "generative": list(set(generative_kws)),
-            }
-            keywords_json = json.dumps(all_keywords, indent=2)
-        else:
-            print("TODO: Local LLM generation not implemented yet.")
-            return
 
-        print(f" -Generated Summary: {summary}")
+            collection.add(
+                embeddings=[embedding.tolist()],
+                metadatas=[
+                    {
+                        "paper_id": paper_id,
+                        "chunk_index": chunk["chunk_index"],
+                        "paper_title": chunk["title"],
+                    }
+                ],
+                ids=[str(chunk_id)],
+            )
 
-        print(" -Creating vector embeddings... ")
-        embeddings = embedding_model.encode(content, convert_to_tensor=False)
-        collection.add(
-            embeddings=[embeddings.tolist()],
-            metadatas=[{"paper_id": paper_id}],
-            ids=[str(paper_id)],
-        )
-        print(" -Vector added to ChromaDB.")
-
-        with sqlite3.connect(DB_PATH) as conn:
-            cursor = conn.cursor()
             cursor.execute(
-                """
-                    UPDATE papers
-                    SET generated_summary = ?, keywords = ?, is_analyzed = 1
-                    WHERE id = ?
-                """,
-                (summary, keywords_json, paper_id),
+                "UPDATE chunks SET is_analyzed = 1 WHERE id = ?", (chunk_id,)
             )
+
+            processed_paper_ids.add(paper_id)
+        conn.commit()
+    print(f"\nSuccessfully vectorized {len(chunks_to_process)} chunks.")
+
+    if not processed_paper_ids:
+        print("No papers to summarize or extract keywords from.")
+    else:
+        print(
+            f"\nVerifying completion status for {len(processed_paper_ids)} candidate papers..."
+        )
+        papers_ready_for_summary = []
+        with sqlite3.connect(config.DB_PATH) as conn:
+            cursor = conn.cursor()
+            for paper_id in processed_paper_ids:
+                # Check if all chunks for this paper are analyzed
+                cursor.execute(
+                    "SELECT COUNT(*) FROM chunks WHERE paper_id = ? AND is_analyzed = 0",
+                    (paper_id,),
+                )
+                unprocessed_count = cursor.fetchone()[0]
+                if unprocessed_count == 0:
+                    papers_ready_for_summary.append(paper_id)
+
+    if not papers_ready_for_summary:
+        print(
+            "\nNo papers have been fully processed yet. Summaries will be generated on a future run."
+        )
+    else:
+        print(
+            f"\nFound {len(papers_ready_for_summary)} papers fully processed. Generating summaries & keywords..."
+        )
+        with sqlite3.connect(config.DB_PATH) as conn:
+            cursor = conn.cursor()
+            for paper_id in tqdm(
+                papers_ready_for_summary, desc="Summarizing & Tagging Papers"
+            ):
+                cursor.execute(
+                    "SELECT full_text, title, author_keywords FROM papers WHERE id = ?",
+                    (paper_id,),
+                )
+                result = cursor.fetchone()
+                if result:
+                    full_text, title, author_keywords_str = result
+                    print(f"\n  - Processing paper: {title[:60]}...")
+
+                    summary_json = generate_structured_summary_api(full_text)
+                    author_kws = (
+                        [
+                            kw.strip()
+                            for kw in author_keywords_str.split(";")
+                            if kw.strip()
+                        ]
+                        if author_keywords_str
+                        else []
+                    )
+                    generative_kws = generate_conceptual_keywords_api(full_text)
+                    all_keywords = {
+                        "author": list(set(author_kws)),
+                        "generative": list(set(generative_kws)),
+                    }
+                    keywords_json = json.dumps(all_keywords, indent=2)
+
+                    cursor.execute(
+                        "UPDATE papers SET structured_summary = ?, keywords = ? WHERE id = ?",
+                        (summary_json, keywords_json, paper_id),
+                    )
             conn.commit()
-        print("  - Main database updated.")
 
     print("\n--- Analysis Complete ---")
-    print(f"Successfully processed {len(papers_to_process)} papers.")
 
 
 if __name__ == "__main__":
