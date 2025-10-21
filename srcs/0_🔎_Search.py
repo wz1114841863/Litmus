@@ -1,5 +1,6 @@
 import sys
 import streamlit as st
+import json
 
 import config
 import search_engine
@@ -13,19 +14,10 @@ APP_DIR = Path(__file__).parent
 sys.path.append(str(APP_DIR))
 
 # Streamlit Page Configuration
-st.set_page_config(
-    page_title="Your Personal Research Assistant",
-    page_icon="🧪",
-    layout="wide",  # use wide mode for more space
-)
+st.set_page_config(page_title="Litmus 🧪 - Search", page_icon="🔎", layout="wide")
 
-st.title("Litmus 🧪")
-st.markdown(
-    """
-        Welcome to Litmus, your personal AI-powered research assistant!
-        Upload academic papers in PDF format, and let Litmus help you analyze and search through them with ease.
-    """
-)
+st.title("🔎 Search Your Knowledge Base")
+st.markdown("Ask a question or enter keywords to find relevant papers and passages.")
 st.markdown("---")
 
 query = st.text_input(
@@ -35,32 +27,46 @@ query = st.text_input(
 search_button = st.button("Search")
 
 if search_button and query:
-    with st.spinner(
-        "Searching through your knowledge base... (this may take a moment)"
-    ):
-        results = search_engine.hybrid_search(query)
+    with st.spinner("Performing deep search through your knowledge base..."):
+        results = search_engine.hybrid_search(query, top_k=10)
 
     st.subheader(f'Found {len(results)} relevant papers for: "{query}"')
 
     if not results:
         st.warning(
-            "No papers found that meet the relevance threshold. "
-            f"You could try a different query or adjust the `SEMANTIC_SEARCH_THRESHOLD` in `config.py` (current value: {config.SEMANTIC_SEARCH_THRESHOLD})."
+            "No relevant passages found that meet the relevance threshold. "
+            f"Try a different query or adjust the `SEMANTIC_SEARCH_THRESHOLD` in `config.py` (current: {config.SEMANTIC_SEARCH_THRESHOLD})."
         )
     else:
         for paper in results:
-            with st.expander(
-                f"**{paper['title']}** ({paper['conference']} {paper['year']})"
-            ):
-                st.markdown(f"**Authors:** *{paper['authors']}*")
-                st.info(f"**AI Summary:** {paper['generated_summary']}")
-                st.markdown(f"**Keywords:** `{paper['keywords']}`")
-                # create a google scholar search link for the paper title
-                scholar_url = "https://scholar.google.com/scholar?q=" + quote_plus(
-                    paper["title"]
+            with st.container(border=True):
+                st.subheader(f"📄 {paper['title']}")
+                st.caption(
+                    f"{paper['conference']} {paper['year']} | Authors: *{paper['authors']}*"
                 )
-                st.markdown(f"[Search for this paper on Google Scholar]({scholar_url})")
+                try:
+                    summary_data = json.loads(paper["structured_summary"])
+                    st.info(
+                        f"**Motivation:** {summary_data.get('motivation', 'N/A')}",
+                        icon="🎯",
+                    )
+                    st.success(
+                        f"**Methodology:** {summary_data.get('methodology', 'N/A')}",
+                        icon="🛠️",
+                    )
+                    st.warning(
+                        f"**Key Results:** {summary_data.get('key_results', 'N/A')}",
+                        icon="💡",
+                    )
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    st.info("Summary not available in structured format.")
+
+                st.markdown("**📖 Relevant Passages Found in this Paper:**")
+                for chunk in paper.get("relevant_chunks", []):
+                    if chunk:
+                        st.markdown(f"> ...{chunk.strip()}...")
 
                 st.markdown(f"--- \n *Local Path: `{paper['file_path']}`*")
+
 elif search_button and not query:
-    st.warning("Please enter a search query to proceed.")
+    st.error("Please enter a query to search.")

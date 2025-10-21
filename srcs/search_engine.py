@@ -6,6 +6,7 @@ import json
 
 import config
 
+from collections import defaultdict
 from sentence_transformers import SentenceTransformer
 
 
@@ -52,9 +53,9 @@ def keyword_search(query, top_k=5):
         cursor.execute(
             """
                 SELECT id FROM papers
-                WHERE title LIKE ? OR abstract LIKE ? OR authors LIKE ? OR keywords LIKE ? LIMIT ?
+                WHERE title LIKE ?  OR authors LIKE ? OR keywords LIKE ? LIMIT ?
             """,
-            (search_term, search_term, search_term, search_term, top_k),
+            (search_term, search_term, search_term, top_k),
         )
 
         results = cursor.fetchall()
@@ -62,7 +63,7 @@ def keyword_search(query, top_k=5):
 
 
 def semantic_search(query, top_k=5):
-    """Performing semantic vector search in ChromaDB"""
+    """Performing semantic vector search in chunks ChromaDB"""
     if not embedding_model or not collection:
         print(
             "Search Engine: Models or database not loaded. Cannot perform semantic search."
@@ -76,18 +77,22 @@ def semantic_search(query, top_k=5):
         n_results=top_k,
     )
 
-    # filter results by distance threshold
-    filtered_ids = []
+    relevant_chunks = []
     ids = results["ids"][0]
     distances = results["distances"][0]
+    metadatas = results["metadatas"][0]
+    documents = results["documents"][0]
 
-    for doc_id, distance in zip(ids, distances):
-        if distance < config.SEMANTIC_SEARCH_THRESHOLD:
-            filtered_ids.append(int(doc_id))
-        else:
-            break
-
-    return filtered_ids
+    for i in range(len(ids)):
+        if (distances[i] < config.SEMANTIC_SEARCH_THRESHOLD) and documents[i]:
+            relevant_chunks.append(
+                {
+                    "paper_id": metadatas[i]["paper_id"],
+                    "chunk_text": documents[i],
+                    "distance": distances[i],
+                }
+            )
+    return relevant_chunks
 
 
 def expand_query_with_llm(query):
@@ -134,38 +139,40 @@ def expand_query_with_llm(query):
 def hybrid_search(query, top_k=5):
     """Combine keyword and semantic search results."""
     all_queries = expand_query_with_llm(query)
-
-    all_keyword_ids = set()
-    all_semantic_ids = set()
+    all_keyword_paper_ids = set()
+    all_relevant_chunks = []
 
     for q in all_queries:
-        keyword_results = keyword_search(q, top_k=top_k)
-        semantic_results = semantic_search(q, top_k=top_k)
-        all_keyword_ids.update(keyword_results)
-        all_semantic_ids.update(semantic_results)
+        all_keyword_paper_ids.update(keyword_search(q, top_k=top_k))
+        all_relevant_chunks.extend(semantic_search(q, top_k=top_k))
 
-    keyword_ids_list = list(all_keyword_ids)
-    semantic_ids_list = list(all_semantic_ids)
+    paper_scores = defaultdict(float)
+    paper_chunks = defaultdict(list)
 
-    fused_scores = {}
-    k = 60
+    for chunk in all_relevant_chunks:
+        paper_id = chunk["paper_id"]
+        score = 1 / (chunk["distance"] + 0.1)
+        paper_scores[paper_id] += score
+        if chunk["chunk_text"] not in paper_chunks[paper_id]:
+            paper_chunks[paper_id].append(chunk["chunk_text"])
 
-    for rank, doc_id in enumerate(keyword_ids_list):
-        if doc_id not in fused_scores:
-            fused_scores[doc_id] = 0
-        fused_scores[doc_id] += 1 / (k + rank + 1)
+    for paper_id in all_keyword_paper_ids:
+        paper_scores[paper_id] += config.KEYWORD_SEARCH_BOOST
 
-    for rank, doc_id in enumerate(semantic_ids_list):
-        if doc_id not in fused_scores:
-            fused_scores[doc_id] = 0
-        fused_scores[doc_id] += 1 / (k + rank + 1)
+    if not paper_scores:
+        return []
 
-    sorted_ids = sorted(
-        fused_scores.keys(), key=lambda id: fused_scores[id], reverse=True
+    sorted_paper_ids = sorted(
+        paper_scores.keys(), key=lambda pid: paper_scores[pid], reverse=True
     )
-    final_ids = sorted_ids[:top_k]
-    print(f"Hybrid Search: Found {len(final_ids)} results.")
-    return get_paper_details_by_ids(final_ids)
+    top_paper_ids = sorted_paper_ids[:top_k]
+    final_results = get_paper_details_by_ids(top_paper_ids)
+
+    for paper in final_results:
+        paper["relevant_chunks"] = paper_chunks.get(paper["id"], [])
+
+    print(f"\nReturning top {len(final_results)} fused and ranked results.")
+    return final_results
 
 
 if __name__ == "__main__":

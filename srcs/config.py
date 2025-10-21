@@ -32,3 +32,4 @@ MODEL_NAME = "deepseek-chat"  # OpenAI model name
 
 # Seacrh configuration
 SEMANTIC_SEARCH_THRESHOLD = 1.0
+KEYWORD_SEARCH_BOOST = 5.0

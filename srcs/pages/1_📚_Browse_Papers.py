@@ -33,7 +33,7 @@ def load_all_analyzed_papers():
     """Load all analyzed papers from the database."""
     try:
         with sqlite3.connect(config.DB_PATH) as conn:
-            query = "SELECT * FROM papers WHERE is_analyzed = 1"
+            query = "SELECT * FROM papers"
             df = pd.read_sql_query(query, conn)
         return df
     except Exception as e:
@@ -66,33 +66,51 @@ else:
         f"Displaying {len(df_final_selection)} papers from {selected_conference} {selected_year}"
     )
 
+st.header(
+    f"Displaying {len(df_final_selection)} papers from {selected_conference} {selected_year}"
+)
+
 for _, paper in df_final_selection.iterrows():
     with st.expander(f"**{paper['title']}**"):
         st.markdown(f"**Authors:** *{paper['authors']}*")
-        st.info(f"**AI Summary:** {paper['generated_summary']}")
+
+        try:
+            if paper.get("structured_summary") and pd.notna(
+                paper["structured_summary"]
+            ):
+                summary_data = json.loads(paper["structured_summary"])
+                st.info(
+                    f"**Motivation:** {summary_data.get('motivation', 'N/A')}",
+                    icon="🎯",
+                )
+                st.success(
+                    f"**Methodology:** {summary_data.get('methodology', 'N/A')}",
+                    icon="🛠️",
+                )
+                st.warning(
+                    f"**Key Results:** {summary_data.get('key_results', 'N/A')}",
+                    icon="💡",
+                )
+            else:
+                st.info("Structured summary not yet generated for this paper.")
+        except (json.JSONDecodeError, TypeError):
+            st.info(
+                f"Could not parse summary: {paper.get('structured_summary', 'N/A')}"
+            )
 
         st.markdown("**Keywords:**")
         try:
-            # Attempt to parse keywords as JSON
-            keywords_data = json.loads(paper["keywords"])
-
-            # Create a tag cloud for each type of keyword
-            # if keywords_data.get("author"):
-            #     st.write(
-            #         "Authored:", " | ".join(f"`{kw}`" for kw in keywords_data["author"])
-            #     )
-            if keywords_data.get("generative"):
-                st.write(
-                    "AI Concepts:",
-                    " | ".join(f"`{kw}`" for kw in keywords_data["generative"]),
-                )
-
-        except (json.JSONDecodeError, TypeError):
-            st.markdown(f"`{paper['keywords']}`")
-
-        scholar_url = "https://scholar.google.com/scholar?q=" + quote_plus(
-            paper["title"]
-        )
-        st.markdown(f"[Search for this paper on Google Scholar]({scholar_url})")
-
-        st.markdown(f"--- \n *Local Path: `{paper['file_path']}`*")
+            if paper.get("keywords") and pd.notna(paper["keywords"]):
+                keywords_data = json.loads(paper["keywords"])
+                if keywords_data.get("author"):
+                    st.write(
+                        "Authored:",
+                        " | ".join(f"`{kw}`" for kw in keywords_data["author"]),
+                    )
+                if keywords_data.get("generative"):
+                    st.write(
+                        "AI Concepts:",
+                        " | ".join(f"`{kw}`" for kw in keywords_data["generative"]),
+                    )
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            pass
