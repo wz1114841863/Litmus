@@ -15,7 +15,7 @@ print("Search Engine: Loading models and database...")
 try:
     embedding_model = SentenceTransformer(config.EMBEDDING_MODEL)
     chroma_client = chromadb.PersistentClient(path=str(config.CHROMA_PATH))
-    collection = chroma_client.get_or_create_collection(name="papers")
+    collection = chroma_client.get_or_create_collection(name="papers_chunks")
     print("Search Engine: Models and vector database loaded successfully.")
 except Exception as e:
     print(f"Search Engine: Error loading models or database: {e}")
@@ -71,10 +71,17 @@ def semantic_search(query, top_k=5):
         return []
 
     print(f"Semantic Search: Searching for '{query}' with top_k={top_k}...")
-    query_embedding = embedding_model.encode(query, convert_to_tensor=False).tolist()
+    query_with_instruction = (
+        f"Represent this sentence for searching relevant passages: {query}"
+    )
+    query_embedding = embedding_model.encode(
+        query_with_instruction,
+        convert_to_tensor=False,
+    ).tolist()
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=top_k,
+        include=["metadatas", "documents", "distances"],
     )
 
     relevant_chunks = []

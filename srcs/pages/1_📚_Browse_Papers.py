@@ -62,9 +62,6 @@ else:
     df_final_selection = df_conference[df_conference["year"] == selected_year]
 
     st.markdown("---")
-    st.header(
-        f"Displaying {len(df_final_selection)} papers from {selected_conference} {selected_year}"
-    )
 
 st.header(
     f"Displaying {len(df_final_selection)} papers from {selected_conference} {selected_year}"

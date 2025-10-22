@@ -30,6 +30,6 @@ OPENAI_API_KEY = API_KEY
 BASE_URL = "https://api.deepseek.com"
 MODEL_NAME = "deepseek-chat"  # OpenAI model name
 
-# Seacrh configuration
-SEMANTIC_SEARCH_THRESHOLD = 1.0
+# Search configuration
+SEMANTIC_SEARCH_THRESHOLD = 0.6
 KEYWORD_SEARCH_BOOST = 5.0

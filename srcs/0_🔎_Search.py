@@ -61,10 +61,10 @@ if search_button and query:
                 except (json.JSONDecodeError, TypeError, AttributeError):
                     st.info("Summary not available in structured format.")
 
-                st.markdown("**📖 Relevant Passages Found in this Paper:**")
-                for chunk in paper.get("relevant_chunks", []):
-                    if chunk:
-                        st.markdown(f"> ...{chunk.strip()}...")
+                # st.markdown("**📖 Relevant Passages Found in this Paper:**")
+                # for chunk in paper.get("relevant_chunks", []):
+                #     if chunk:
+                #         st.markdown(f"> ...{chunk.strip()}...")
 
                 st.markdown(f"--- \n *Local Path: `{paper['file_path']}`*")
 

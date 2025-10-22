@@ -160,7 +160,10 @@ def main():
     else:
         embedding_model = SentenceTransformer(config.EMBEDDING_MODEL)
         chroma_client = chromadb.PersistentClient(path=str(config.CHROMA_PATH))
-        collection = chroma_client.get_or_create_collection(name="papers")
+        collection = chroma_client.get_or_create_collection(
+            name="papers_chunks",
+            metadata={"hnsw:space": "cosine"},
+        )
         print("Models and vector database loaded.")
 
     if not args.re_summary:
@@ -182,6 +185,7 @@ def main():
 
                 collection.add(
                     embeddings=[embedding.tolist()],
+                    documents=[chunk["chunk_text"]],
                     metadatas=[
                         {
                             "paper_id": paper_id,
@@ -230,7 +234,7 @@ def main():
                 continue
 
             # print(f"\n  - Processing paper: {title[:60]}...")
-            
+
             try:
                 summary_json = generate_structured_summary_api(full_text)
                 author_kws = [
