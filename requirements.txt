@@ -6,3 +6,4 @@ openai
 sentence-transformers
 chromadb
 streamlit
+grobid-client-python

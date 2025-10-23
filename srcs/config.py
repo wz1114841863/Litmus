@@ -33,3 +33,6 @@ MODEL_NAME = "deepseek-chat"  # OpenAI model name
 # Search configuration
 SEMANTIC_SEARCH_THRESHOLD = 0.6
 KEYWORD_SEARCH_BOOST = 5.0
+
+# GROBID server URL
+GROBID_URL = "http://localhost:8070/"

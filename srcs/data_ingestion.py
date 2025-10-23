@@ -3,6 +3,7 @@ import chromadb
 import sqlite3
 import fitz  # PyMuPDF
 import re
+import json
 import shutil
 import os
 
@@ -10,6 +11,8 @@ import config
 
 from pathlib import Path
 from tqdm import tqdm
+from grobid_client.grobid_client import GrobidClient
+from xml.etree import ElementTree as ET
 
 
 def setup_database():
@@ -22,12 +25,13 @@ def setup_database():
             CREATE TABLE IF NOT EXISTS papers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT,
-                authors TEXT,
+                authors TEXT,  -- json list of strings
                 conference TEXT,
                 year INTEGER,
                 file_path TEXT NOT NULL UNIQUE,
-                author_keywords TEXT,
-                full_text TEXT,
+                author_keywords TEXT, -- json list of strings
+                structured_abstract TEXT, -- abstract
+                full_text TEXT,  -- Main text
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -59,6 +63,42 @@ def reset_database():
         print("Existing ChromaDB vector store deleted.")
 
     print("Database has been reset.")
+
+
+def parse_grobid_xml(xml_content):
+    """Parses Grobid XML content to extract structured abstract."""
+    ns = {"tei": "http://www.tei-c.org/ns/1.0"}
+    root = ET.fromstring(xml_content)
+
+    title = root.find(".//tei:titleStmt/tei:title", ns).text or "N/A"
+    authors = []
+    for author_node in root.findall(".//tei:analytic/tei:author/tei:persName", ns):
+        firstname = author_node.find(".//tei:forename", ns)
+        surname = author_node.find(".//tei:surname", ns)
+        name = " ".join(
+            [
+                n.text
+                for n in [firstname, surname]
+                if n is not None and n.text is not None
+            ]
+        )
+        if name:
+            authors.append(name)
+    abstract_node = root.find(".//tei:profileDesc/tei:abstract/tei:p", ns)
+    abstract = abstract_node.text if abstract_node is not None else "N/A"
+
+    body_text = []
+
+    for p in root.findall(".//tei:text/tei:body//tei:p", ns):
+        if p.text:
+            body_text.append(p.text)
+
+    return {
+        "title": title.strip(),
+        "authors": json.dumps(authors),  # 存为JSON字符串
+        "structured_abstract": abstract.strip(),
+        "full_text": "\n".join(body_text).strip(),
+    }
 
 
 def chunk_text(text, chunk_size=512, overlap=50):
@@ -185,11 +225,15 @@ def main():
     parser = argparse.ArgumentParser(description="Litmus Data Ingestion Script")
     parser.add_argument("--reset", action="store_true", help="Reset the database")
     args = parser.parse_args()
+
     if args.reset:
         reset_database()
 
     print("Litmus: Starting data ingestion...")
     setup_database()
+
+    print("Initializing Grobid client...")
+    client = GrobidClient(config.GROBID_URL)
 
     print(f"Processing PDF folders {config.PDF_DIR}...")
     pdf_files = list(config.PDF_DIR.rglob("**/*.pdf"))
@@ -206,17 +250,55 @@ def main():
     with sqlite3.connect(config.DB_PATH) as conn:
         cursor = conn.cursor()
         for pdf_path in tqdm(pdf_files, desc="Processing PDFs"):
-            pdf_file = Path(pdf_path)
-            paper_info = extract_info_from_pdf(pdf_file)
-            if paper_info:
-                was_inserted = insert_paper_to_db(paper_info, cursor)
-                paper_id = cursor.lastrowid if was_inserted else None
-                chunks = chunk_text(paper_info["full_text"])
-                chunk_sql = "INSERT INTO chunks (paper_id, chunk_text, chunk_index) VALUES (?, ?, ?)"
-                chunk_data = [(paper_id, text, i) for i, text in enumerate(chunks)]
-                cursor.executemany(chunk_sql, chunk_data)
+            if cursor.execute(
+                "SELECT id FROM papers WHERE file_path = ?", (str(pdf_path.resolve()),)
+            ).fetchone():
+                continue
 
+            try:
+                _, _, xml_content = client.process_pdf(
+                    "processFulltextDocument",
+                    str(pdf_path),
+                    generateIDs=False,
+                    consolidate_header=True,
+                    tei_coordinates=False,
+                    consolidate_citations=False,
+                    include_raw_citations=False,
+                    include_raw_affiliations=False,
+                    segment_sentences=False,
+                )
+                if not xml_content:
+                    raise ValueError("Grobid did not return any content.")
+                structured_data = parse_grobid_xml(xml_content)
+
+                try:
+                    conference, year_str = pdf_path.parent.name.split("_")
+                    year = int(year_str)
+                    structured_data.update(
+                        {
+                            "conference": conference,
+                            "year": year,
+                            "file_path": str(pdf_path.resolve()),
+                        }
+                    )
+                except ValueError:
+                    conference, year = "Unknown", 0
+
+                insert_paper_to_db(structured_data, cursor)
+                paper_id = cursor.lastrowid
+                chunks = chunk_text(structured_data["full_text"])
+                chunk_data = [(paper_id, text, i) for i, text in enumerate(chunks)]
+                cursor.executemany(
+                    "INSERT INTO chunks (paper_id, chunk_text, chunk_index) VALUES (?, ?, ?)",
+                    chunk_data,
+                )
                 new_papers += 1
+            except Exception as e:
+                error_message = f"Grobid or XML parse failed: {pdf_path.name} - {e}"
+                print(f"\n  - Error: {error_message}")
+                with open(config.LOG_FILE_PATH, "a") as f:
+                    f.write(f"{pdf_path.resolve()} - {error_message}\n")
+
         conn.commit()
 
     print(f"\n-------Finished Data Ingestion-------")
