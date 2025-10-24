@@ -7,3 +7,4 @@ sentence-transformers
 chromadb
 streamlit
 grobid-client-python
+lxml
